@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # coding: utf-8
-import os
-import torch
+import torch,pickle
+from PIL import Image
 import numpy as np
+import pandas as pd
+from skimage import transform
 from dnnbrain.dnn.models import AlexNet
 from dnnbrain.dnn.base import ip
 from dnnbrain.dnn.core import Mask
 from dnnbrain.dnn.algo import SynthesisImage
-from os.path import join as pjoin
-from os.path import exists as pexist
 import matplotlib.pyplot as plt
 
 
@@ -24,9 +24,7 @@ unit_info = {'conv2':[[2],[186]],
             'conv3':[[157],[21]],
             'conv4':[[43],[198]],
             'conv5':[[145],[162]]}
-
-
-        
+   
 class StimPrep:
     """
     Generate optimal image based on net_info
@@ -36,10 +34,11 @@ class StimPrep:
                  
         """
         """
+        if np.logical_xor(layer is None, channel is None):
+            raise ValueError("layer and channel must be used together!")
+        if layer is not None:
+            self.set_unit(layer, channel, unit)
         self.dnn = dnn
-        
-        
-        
         self.dnn.eval()  
         #init synthesisImage
         self.syn = SynthesisImage(self.dnn)
@@ -48,8 +47,37 @@ class StimPrep:
         self.syn.set_layer(self.layer, self.channel)
     
     
-    def 
-    def find_para(self, reg_lambda, factor, top, nrun):
+    def set_unit(self, layer, channel, unit):
+        """
+        Set layer, channel, unit and its corresponding rf info
+
+        Parameters:
+        ----------
+        layer[str]: name of the layer where the algorithm performs on
+        channel[int]: sequence number of the channel where the algorithm performs on
+        unit[tuple]: the center unit's location in each channel's feature map
+        """
+        self.mask = Mask()
+        self.mask.set(layer, channels=[channel])    
+        self.unit = unit
+        #the num means the receptive field size in different layers
+        rf_info = {'conv2':51, 'conv3':99, 'conv4':131, 'conv5':163}
+        self.rf_size = rf_info[self.layer]
+
+        def rotate(self, img, angle):
+            """
+            img:[ndarray] 
+            """
+            img = img.rotate(angle)
+            pic = np.array(img).astype('uint8')
+            x = np.arange(224)
+            y = np.arange(224)
+            x,y = np.meshgrid(x,y)
+            erea = (x-223/2)**2+(y-223/2)**2
+            pic[erea>(163/2)**2,:] = [127,127,127]
+            return pic
+
+    def find_para(self, reg_lambda, factor, top, nruns):
         """
         give a parameter range to find the top parameters in nruns
         
@@ -58,20 +86,41 @@ class StimPrep:
         reg_lambda[ndarray]
         factor[ndarray]
         top[int]
-        nrun[int]
+        nruns[int]
         
         Return
         ----------
         top_param[dict]
         """
-        if isinstance(reg_lambda, np.ndarray) & isinstance(factor, np.ndarray):
+        if not isinstance(reg_lambda, np.ndarray) or not isinstance(factor, np.ndarray):
+            raise TypeError('Both reg_lambda and factor only support ndarray')
+        else:
+            #init dataframe for sorting
+            para_act = pd.DataFrame(columns=['lambda','factor','act'])
             for l_len in range(reg_lambda.shape):
                 for f_len in range(factor.shape):
                     lam = reg_lambda[l_len]
                     fac = factor[f_len]
-                    op_img = self.syn.synthesize(None, unit, lr, reg_lambda, 
-                                                 n_iter, '.', None, GB_radius, factor, step=50)
-        
+                    act_all = np.zeros(shape=(nruns))
+                    #certify img's stability
+                    for run in range(nruns):
+                        op_img = self.syn.synthesize(None, self.unit, 0.1, lam, 150,
+                                                     '.', None, 0.2, fac, step=50)
+                        img = op_img[np.newaxis,:,:,:]
+                        act = self.dnn.compute_activation(img, self.mask).get(self.layer)[0,0,self.unit[0],self.unit[1]]
+                        act_all[run] = act
+                    act_sta = np.mean(act_all)
+                    #add values to dataframe
+                    info = pd.DataFrame({'lambda':lam,'factor':fac,'act':act_sta}, index=[0])
+                    para_act = para_act.append(info, ignore_index=True)
+            #sort the dataframe to get top 20 parameters
+            para_act = para_act.sort_values(by=['act'], ascending=False).reset_index(drop=True)
+            para_act = para_act.loc[:(top+1),:]
+            #generate top parameters dict
+            top_param = para_act.to_dict(orient='index')
+            return top_param
+            
+            
     def gen_opt(self, top_param, subnum):
         """
         Parameter:
@@ -82,66 +131,146 @@ class StimPrep:
         Returns
         ---------
         optimal[dict]  pickle 
-            key:top-sub  value:ndarray
+            key:top_sub  value:ndarray
         """
-        
-        op_img = self.syn.synthesize(init_image, unit, lr, reg_lambda, n_iter, '.', None, GB_radius, factor, step=50)
-        #op_img = op_img.transpose(1,2,0)            
-        act = synthesis.activ_losses[-1]
-        trg = f'lambda-{reg_lambda}_radius-{GB_radius}-factor-{factor}_iter{n_iter}_act-{-act}.jpg'
-
-
-    def gen_tran(self, optimal, startpoint, axis, length, step):
-        """
-            initialize a startpoint to translate, generating a list of stimuli
+        #init dict
+        optimal = dict()
+        for top in top_param.keys():
+            para = top_param[top]
+            lam = para['lambda']
+            fac = para['factor']
+            for sub in range(subnum):
+                op_img = self.syn.synthesize(None, self.unit, 0.1, lam, 150,
+                                             '.', None, 0.2, fac, step=50)
+                #transpose its shape to (224,224,3)
+                op_img = op_img.transpose(1,2,0)    
+                #add values to the dict
+                op_key = f'top{top+1}_sub{sub+1}'
+                optimal[op_key] = op_img
+       #save the dict using pickle
     
+        return optimal
+
+    def gen_tran(self, optimal, axis):
+        """
+        Generating a list of stimuli based on its unit info
+        Only support the half of the original stimuli enter the Left margin of the receptive field
+        to move to the symmetrical on the right in stride 1
         Parameters
         ----------
         optimal[dict]
-        startpoint[tuple]
-        axis[str]
-        length[int]
-        step[int]
+        axis[str]: 'X' or 'Y'
 
         Returns
         -------
         opt_tran[dict]
             
         """
-        pass
+        if axis != 'X' or axis != 'Y':
+            raise ValueError('axis only support X and Y!')
+        else:
+            opt_tran = dict()
+            for org in optimal.keys():
+                op_img = optimal[org]
+                #crop op_img according to its rf_size
+                center = int((224+1)/2)
+                span = int((self.rf_size-1)/2)
+                op_img = op_img[center-span:center+span, center-span:center+span,:]
+                #move the oringal image to generate new stimulus
+                center_new = int((448+1)/2)
+                start_y = int((448-self.rf_size)/2)
+                start_x = 224-self.rf_size 
+                #translate in axis X
+                if axis == 'X':
+                    for move in range(start_x, center_new+1):
+                        #init a background waiting for paste, its RGB:(127,127,127)
+                        bkg = np.zeros((448,448,3),dtype=np.uint8)
+                        bkg[:,:,:] = 127
+                        bkg = Image.fromarray(bkg)
+                        bkg.paste(op_img, (move, start_y))
+                        op_trg = np.asarray(bkg.crop(112,112,336,336))
+                        #add vaues to dict
+                        tr_key = f'{org}_move{move-224}'
+                        opt_tran[tr_key] = op_trg
+                #translate in axis Y
+                else:
+                    for move in range(start_x, center_new+1):
+                        #init a background waiting for paste, its RGB:(127,127,127)
+                        bkg = np.zeros((448,448,3),dtype=np.uint8)
+                        bkg[:,:,:] = 127
+                        bkg = Image.fromarray(bkg)
+                        bkg.paste(op_img, (start_y, move))
+                        op_trg = np.asarray(bkg.crop(112,112,336,336))
+                        #add vaues to dict
+                        tr_key = f'{org}_move{move-224}'
+                        opt_tran[tr_key] = op_trg
+            #save the dict using pickle
+                        
+            return opt_tran
     
-    
-    def gen_rot():
+    def gen_rot(self, optimal, interval):
         """
         
-
+        
         Parameters
         ----------
-        def gen_rot : TYPE
-            DESCRIPTION.
-
+        optimal[dict]
+        interval[int] the interval of degrees
+        
         Returns
         -------
-        None.
+        opt_rot[dict]
 
         """
-        pass
+        opt_rot = dict()
+        for org in optimal.keys():
+            op_img = optimal[org]
+            #rotate op_img based on degree
+            for degree in range(0, 360, interval):
+                op_rog = self.rotate(op_img, degree)
+                ro_key = f'{org}_rot{degree-180}'
+                opt_rot[ro_key] = op_rog
+            #save the dict using pickle
+                        
+            return opt_rot
     
-    def gen_sca():
+    def gen_sca(self, optimal, num):
         """
 
 
         Parameters
         ----------
-        def gen_sca : TYPE
-            DESCRIPTION.
+        optimal[dict]
+        num[int] the total nums of scale stimuli
 
         Returns
         -------
         None.
 
         """
-        pass
+        opt_sca = dict()
+        for org in optimal.keys():
+            op_img = optimal[org]
+            #crop op_img according to its rf_size
+            center = int((224+1)/2)
+            span = int((self.rf_size-1)/2)
+            op_img = op_img[center-span:center+span, center-span:center+span,:]
+            for per in range(1, num+1):
+                #init a background waiting for paste, its RGB:(127,127,127)
+                bkg = np.zeros((224,224,3),dtype=np.uint8)
+                bkg[:,:,:] = 127
+                bkg = Image.fromarray(bkg)
+                #scale op_img based on num
+                percentage = per/num
+                op_rog = transform.rescale(op_img, [percentage,percentage])
+                #paste op_rog on bkg!!!!!waiting to fix
+                bkg.paste(op_rog,)
+                #add values to dict
+                sc_key = f'{org}_sca{per}/{num}'
+                opt_sca[sc_key] = op_rog
+            #save the dict using pickle
+                        
+            return opt_sca
 
 
     def gen_na():
@@ -188,18 +317,3 @@ class StimPrep:
 
         """
     
-    
-    
-    
-    
-    for layer in net_info.keys():
-        for chn in net_info[layer]:
-            save_path = f'/nfs/s2/userhome/zhouming/workingdir/out/Inv_opt/out/conv5_relu/chn{chn[0]-1}/image2/'
-            if not pexist(save_path):
-                os.mkdir(save_path)
-            dnn = AlexNet()
-            mask = Mask(layer,chn)
-        if not pexist(save_path):
-            os.mkdir(save_path)
-        img_out = ip.to_pil(op_img,True)
-        img_out.save(pjoin(save_path, trg))
