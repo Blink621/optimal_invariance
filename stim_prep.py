@@ -444,6 +444,16 @@ class StimPrep:
             na_key = f'top{num+1}'
             natrual[na_key] = pic
             num += 1
+        #save the dict using pickle
+        cur_path = os.getcwd()
+        store_folder = pjoin(cur_path, 'DataStore')
+        if not os.path.exists(store_folder):
+            os.makedirs(store_folder)
+        file = pjoin(store_folder, f'NaturalStimuli-{self.layer}_{self.channel}.pickle')
+        if os.path.exists(file):
+            os.remove(file)
+        with open(file, 'wb') as f:
+            pickle.dump(natrual, f)
         return natrual
 
     def extr_act(self, stim, topnum, subnum):
