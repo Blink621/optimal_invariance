@@ -440,7 +440,7 @@ class StimPrep:
         interest = np.argsort(act_diff)[-top:][::-1]
         num = 0
         for item in interest:
-            pic =  natrual_save[str(num)]
+            pic =  natrual_save[str(item)]
             na_key = f'top{num+1}'
             natrual[na_key] = pic
             num += 1
