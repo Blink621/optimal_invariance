@@ -1,19 +1,14 @@
-#!/usr/bin/env python
-# coding: utf-8
-import torch,pickle,os
+import pickle,os,copy
 from os.path import join as pjoin
 from PIL import Image
 import numpy as np
 import pandas as pd
 from skimage import transform
-from dnnbrain.dnn.models import AlexNet
 from dnnbrain.dnn.base import ip
 from dnnbrain.dnn.core import Mask
 from dnnbrain.dnn.algo import SynthesisImage
-import matplotlib.pyplot as plt
 
 
-   
 class StimPrep:
     """
     Generate optimal image based on net_info
@@ -22,15 +17,17 @@ class StimPrep:
                  precondition_metric=None, smooth_metric=None):
                  
         """
+        Parameters:
+        ----------
+        dnn[DNN]: dnnbrain's DNN object
+        metric[str] : four metrics used in synthesisImage
         """        
-
         self.dnn = dnn
         self.dnn.eval()
         #init synthesisImage
         self.syn = SynthesisImage(self.dnn)
         self.syn.set_metric(activ_metric, regular_metric, precondition_metric, smooth_metric)
         self.syn.set_utiliz(False, True)
-
 
     def set_unit(self, layer, channel, unit):
         """
@@ -52,13 +49,19 @@ class StimPrep:
         self.channel = channel
         self.syn.set_layer(self.layer, self.channel)
         self.unit = unit
-        #the num means the receptive field size in different layers
-        rf_info = {'conv2':51, 'conv3':99, 'conv4':131, 'conv5':163}
-        self.rf_size = rf_info[self.layer]
+        #the first num means the receptive field size, the second num means the feature map size
+        rf_info = {'conv2':[51,27], 'conv3':[99,13], 'conv4':[131,13], 'conv5':[163,13]}
+        self.rf_size = rf_info[self.layer][0]
+        self.fm_size = rf_info[self.layer][1]
 
     def rotate(self, img, angle):
         """
+        rotate function used in rotation invariance
+        
+        Parameters:
+        ----------
         img:[ndarray] 
+        angle[int]: the radian value of rotation
         """
         img = img.rotate(angle)
         pic = np.array(img).astype('uint8')
@@ -93,18 +96,18 @@ class StimPrep:
                 for f_len in range(factor.size):
                     lam = reg_lambda[l_len]
                     fac = factor[f_len]
-                    act_all = np.zeros(shape=(nruns))
                     #certify img's stability
+                    stimuli_set = np.random.rand(224,224,3).astype('uint8')[np.newaxis,:,:,:].transpose(0,3,1,2)
                     for run in range(nruns):
-                        op_img = self.syn.synthesize(None, self.unit, 0.1, lam, 10,
-                                                     '.', None, 0.2, fac, step=5)
+                        op_img = self.syn.synthesize(None, self.unit, 0.1, lam, 100,
+                                                     '.', None, 0.2, fac, step=150)
                         op_img = ip.to_pil(op_img,True)
                         op_img = np.array(op_img).transpose(2,0,1)
                         img = op_img[np.newaxis,:,:,:]
-                        
-                        act = self.dnn.compute_activation(img, self.mask).get(self.layer)[:,0,self.unit[0],self.unit[1]]
-                        act_all[run] = act
-                    act_sta = np.mean(act_all)
+                        stimuli_set = np.concatenate((stimuli_set,img),axis=0)
+                    stimuli_set = np.delete(stimuli_set,0,axis=0)
+                    act = self.dnn.compute_activation(stimuli_set, self.mask).get(self.layer)[:,0,self.unit[0],self.unit[1]]
+                    act_sta = np.mean(np.array(act))
                     #add values to dataframe
                     info = pd.DataFrame({'lambda':lam,'factor':fac,'act':act_sta}, index=[0])
                     para_df = para_df.append(info, ignore_index=True)
@@ -119,13 +122,16 @@ class StimPrep:
             if not os.path.exists(store_folder):
                 os.makedirs(store_folder)
             file = pjoin(store_folder, f'TopParameters-{self.layer}_{self.channel}.pickle')
+            if os.path.exists(file):
+                os.remove(file)            
             with open(file, 'wb') as f:
                 pickle.dump(top_param, f)
-
             return top_param
 
     def gen_opt(self, top_param, subnum):
         """
+        generate optimal images according to the given top parameters
+        
         Parameter:
         ----------
         top_param[dict,str]
@@ -152,8 +158,8 @@ class StimPrep:
             lam = para['lambda']
             fac = para['factor']
             for sub in range(subnum):
-                op_img = self.syn.synthesize(None, self.unit, 0.1, lam, 5,
-                                             '.', None, 0.2, fac, step=10)
+                op_img = self.syn.synthesize(None, self.unit, 0.1, lam, 100,
+                                             '.', None, 0.2, fac, step=150)
                 # transpose its shape to (224,224,3)
                 op_img = op_img.transpose(1,2,0)    
                 # add values to the dict
@@ -173,9 +179,10 @@ class StimPrep:
 
     def gen_tran(self, optimal, axis):
         """
-        Generating a list of stimuli based on its unit info
+        Generate stimulus used in transition invariance expirement
         Only support the half of the original stimuli enter the Left margin of the receptive field
         to move to the symmetrical on the right in stride 1
+        
         Parameters
         ----------
         optimal[dict]
@@ -184,7 +191,6 @@ class StimPrep:
         Returns
         -------
         opt_tran[dict]
-            
         """
         # Type check
         if not (isinstance(optimal,str) or isinstance(optimal,dict)):
@@ -195,7 +201,6 @@ class StimPrep:
                 raise NameError('No pickle file exists')
             with open(optimal,'rb') as f:
                 optimal = pickle.load(f)        
-        
         # Run stimuli
         if not axis in ['X','Y'] :
             raise ValueError('axis only support X and Y!')
@@ -204,13 +209,13 @@ class StimPrep:
             for org in optimal.keys():
                 op_img = optimal[org]
                 #crop op_img according to its rf_size
-                center = int((224+1)/2)
-                span = int((self.rf_size-1)/2)
+                center = int(224/2)
+                span = int(self.rf_size/2)
                 op_img = op_img[center-span:center+span, center-span:center+span,:].astype('uint8')
                 #op_img = ip.to_pil(op_img.transpose(2,0,1))
                 op_img = Image.fromarray(op_img)
                 #move the oringal image to generate new stimulus
-                center_new = int((448+1)/2)
+                center_new = int(448/2)
                 start_y = int((448-self.rf_size)/2)
                 start_x = 224-self.rf_size 
                 #translate in axis X
@@ -223,7 +228,7 @@ class StimPrep:
                         bkg.paste(op_img, (move, start_y))
                         op_trg = np.asarray(bkg.crop((112,112,336,336)))
                         #add vaues to dict
-                        tr_key = f'{org}_move:{move-224+int(self.rf_size/2)}'
+                        tr_key = f'{org}_move:{move-224+span}'
                         opt_tran[tr_key] = op_trg
                 #translate in axis Y
                 else:
@@ -233,9 +238,9 @@ class StimPrep:
                         bkg[:,:,:] = 127
                         bkg = Image.fromarray(bkg)
                         bkg.paste(op_img, (start_y, move))
-                        op_trg = np.asarray(bkg.crop(112,112,336,336))
+                        op_trg = np.asarray(bkg.crop((112,112,336,336)))
                         #add vaues to dict
-                        tr_key = f'{org}_move:{move-224}'
+                        tr_key = f'{org}_move:{move-224+span}'
                         opt_tran[tr_key] = op_trg
             #save the dict using pickle
             cur_path = os.getcwd()
@@ -251,7 +256,8 @@ class StimPrep:
     
     def gen_rot(self, optimal, interval):
         """
-
+        Generate stimulus used in rotation invariance expirement
+        
         Parameters
         ----------
         optimal[dict]
@@ -260,7 +266,6 @@ class StimPrep:
         Returns
         -------
         opt_rot[dict]
-
         """
         # Type check
         if not (isinstance(optimal,str) or isinstance(optimal,dict)):
@@ -293,12 +298,11 @@ class StimPrep:
             os.remove(file)            
         with open(file, 'wb') as f:
             pickle.dump(opt_rot, f)
-
         return opt_rot
     
     def gen_sca(self, optimal, num):
         """
-
+        Generate stimulus used in scaling invariance expirement
 
         Parameters
         ----------
@@ -307,8 +311,7 @@ class StimPrep:
 
         Returns
         -------
-        None.
-
+        opt_sca[dict]
         """
         # Type check
         if not (isinstance(optimal,str) or isinstance(optimal,dict)):
@@ -319,7 +322,7 @@ class StimPrep:
                 raise NameError('No pickle file exists')
             with open(optimal,'rb') as f:
                 optimal = pickle.load(f)
-        
+        #init dict for recording info
         opt_sca = dict()
         for org in optimal.keys():
             op_img = optimal[org]
@@ -352,19 +355,96 @@ class StimPrep:
                 pickle.dump(opt_sca, f)
             return opt_sca
 
-    def gen_na(self):
+    def gen_na(self, stim, top):
         """
-        Generate natural images
+        Pick top natrual images of the target unit in ImageNet2012 test data
         
         Parameters
         ----------
-        
+        stim[stim]:dnnbrain stim object
+        dmask[csv]:info of interested units
+        top[int]:the top num you focus on.
         
         Returns
         -------
-        None.
-
+        natural[dict]
         """
+        natrual_save = dict()
+        natrual = dict()
+        intere = 2*top
+        # Extract Activation
+        activation = self.dnn.compute_activation(stim, self.mask)
+        # Use Array_statistic in dnn.base to Do Max-pooling
+        pooled_act = activation.pool('max').get(self.layer).flatten()
+        # Do Sorting and Arg-sorting
+        act_sort = np.argsort(-pooled_act, axis=0, kind='heapsort')
+        act_sort = act_sort[0:intere]
+        pooled_act = -np.sort(-pooled_act, axis=0, kind='heapsort')
+        pooled_act = pooled_act[0:intere]
+        # Set .stim.csv Activation Information
+        channel_stim = copy.deepcopy(stim)
+        channel_stim.set('stimID', stim.get('stimID')[act_sort])
+        #get specific location of units
+        act_top = self.dnn.compute_activation(channel_stim, self.mask).get(self.layer)
+        loc = []
+        for num in range(intere):
+            act_map = act_top[num].squeeze(0)
+            pos = np.unravel_index(np.argmax(act_map),act_map.shape)
+            loc.append(pos)
+        #crop natural image of its receptive field
+        topnum = 0
+        act_base = np.zeros((intere))
+        act_test = np.zeros((intere))
+        for img_id in channel_stim.get('stimID'):
+            image = np.asarray(Image.open(pjoin(stim.header['path'], img_id)))
+            #solve 
+            if image.ndim == 2:
+                pass
+            else:
+                image = image.transpose(2,0,1)
+                image = ip.resize(image, (224,224)).transpose(1,2,0)
+                #init bkg
+                bkg = np.zeros((224,224,3),dtype=np.uint8)
+                bkg[:,:,:] = 127
+                bkg = Image.fromarray(bkg)                
+                #get units location
+                na_unit = loc[topnum]
+                #define para to pick region of rf
+                center_x = int((na_unit[0]/self.fm_size) * 224)
+                center_y = int((na_unit[1]/self.fm_size) * 224)
+                threshold = int(self.rf_size/2)
+                #define rule to handle different situation
+                rule = lambda x,y: (x,y) if (x>0) & (y<224) else (0,self.rf_size) if x<0 else (224-self.rf_size,224)
+                x_pos = rule(center_x-threshold, center_x+threshold)
+                y_pos = rule(center_y-threshold, center_y+threshold)
+                na_img = image[x_pos[0]:x_pos[1], y_pos[0]:y_pos[1], :]
+                na_img = Image.fromarray(na_img)
+                #get upper left pos and paste
+                point = int(112-self.rf_size/2)
+                bkg.paste(na_img, (point, point))
+                nat_img = np.asarray(bkg)
+                #compute act to select useful rf_image
+                img_org = image[np.newaxis,:,:,:].transpose(0,3,1,2)
+                img_test = nat_img[np.newaxis,:,:,:].transpose(0,3,1,2)
+                act_ba = self.dnn.compute_activation(img_org, self.mask).get(self.layer)[0,0,na_unit[0],na_unit[1]]
+                act_te = self.dnn.compute_activation(img_test, self.mask).get(self.layer)[0,0,6,6]
+                act_base[topnum] = act_ba
+                act_test[topnum] = act_te
+                #add values to dict
+                nasave_key = f'{topnum}'
+                natrual_save[nasave_key] = nat_img
+                topnum += 1
+        #select images which act bias is less
+        standard = np.mean(act_test)
+        act_diff = act_test - standard
+        interest = np.argsort(act_diff)[-top:][::-1]
+        num = 0
+        for item in interest:
+            pic =  natrual_save[str(num)]
+            na_key = f'top{num+1}'
+            natrual[na_key] = pic
+            num += 1
+        return natrual
 
     def extr_act(self, stim, topnum, subnum):
         """
@@ -415,12 +495,12 @@ class StimPrep:
                         dnn_input = stimuli[np.newaxis,:,:,:].transpose(0,3,1,2)
                         stimuli_set = np.concatenate((stimuli_set,dnn_input),axis=0)
                         column_list.append(level)
-                
+                #generate activation dict
                 stimuli_set = np.delete(stimuli_set,0,axis=0)
-                activ = dnn.compute_activation(stimuli_set,self.mask).get(self.layer)[:,0,self.unit[0],self.unit[1]]
+                activ = self.dnn.compute_activation(stimuli_set,self.mask).get(self.layer)[:,0,self.unit[0],self.unit[1]]
                 activ_list = list(activ)
                 activ_dict[picname]=activ_list
-
+        #generate dataframe
         df_activ = pd.DataFrame(activ_dict)
         df_activ = pd.DataFrame(np.array(df_activ).transpose(),
                                 index=list(activ_dict.keys()),columns=column_list)
@@ -432,40 +512,3 @@ class StimPrep:
             os.makedirs(store_folder)
         file_name = pjoin(store_folder,f'{self.layer}_{self.channel}_{type_name}.csv')
         df_activ.to_csv(file_name)
-
-    
-
-
-init_image = None
-unit ={'conv2': (13,13),'conv3':(6,6)}
-reg_meth = 'TV'
-topnum = 2
-subnum = 2
-lr = 0.1
-reg_lambda = np.array([0.001])
-n_iter = 150
-factor = np.arange(0.2,0.5,0.05)
-unit_info = { 'conv2':[2,186],
-              'conv3':[157,21],
-              'conv4':[43,198],
-              'conv5':[145,162]}
-dnn = AlexNet()
-experiment = StimPrep(dnn)
-experiment.set_unit('conv3',21,(6,6))
-pth = r'/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/DataStore'
-file = pjoin(pth,'TransferStimuli-conv3_21.pickle')
-experiment.extr_act(file,2,2)
-
-
-for layer,chn in unit_info.items():
-    for i in range(len(chn)):
-        experiment.set_unit(layer,chn[i],unit[layer])
-        para_dict = experiment.find_para(reg_lambda,factor,top=topnum,nruns=2)
-        image_set = experiment.gen_opt(para_dict,subnum)
-        transfer_stimuli = experiment.gen_tran(image_set,'X')
-        rotate_stimuli = experiment.gen_rot(image_set,30)
-    for stimuli in [transfer_stimuli,rotate_stimuli]:
-        experiment.extr_act(stimuli,topnum,subnum)
-
-
-
