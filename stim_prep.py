@@ -177,7 +177,7 @@ class StimPrep:
             pickle.dump(optimal,f)
         return optimal
 
-    def gen_tran(self, optimal, axis):
+    def gen_tran(self, optimal, axis, stype='optimal'):
         """
         Generate stimulus used in transition invariance expirement
         Only support the half of the original stimuli enter the Left margin of the receptive field
@@ -187,7 +187,8 @@ class StimPrep:
         ----------
         optimal[dict]
         axis[str]: 'X' or 'Y'
-
+        stype[str]: 'optimal' or 'natural'
+            
         Returns
         -------
         opt_tran[dict]
@@ -200,7 +201,9 @@ class StimPrep:
             if not os.path.exists(optimal):
                 raise NameError('No pickle file exists')
             with open(optimal,'rb') as f:
-                optimal = pickle.load(f)        
+                optimal = pickle.load(f) 
+        if not stype in ['optimal','natural'] :
+            raise ValueError('stype only support optimal and natural!')
         # Run stimuli
         if not axis in ['X','Y'] :
             raise ValueError('axis only support X and Y!')
@@ -244,7 +247,10 @@ class StimPrep:
                         opt_tran[tr_key] = op_trg
             #save the dict using pickle
             cur_path = os.getcwd()
-            store_folder = pjoin(cur_path, 'DataStore')
+            if stype == 'natural':
+                store_folder = pjoin(cur_path, 'NaDataStore')
+            else:
+                store_folder = pjoin(cur_path, 'DataStore')
             if not os.path.exists(store_folder):
                 os.makedirs(store_folder)
             file = pjoin(store_folder, f'TransferStimuli-{self.layer}_{self.channel}.pickle')
@@ -254,7 +260,7 @@ class StimPrep:
                 pickle.dump(opt_tran, f)
             return opt_tran
     
-    def gen_rot(self, optimal, interval):
+    def gen_rot(self, optimal, interval, stype='optimal'):
         """
         Generate stimulus used in rotation invariance expirement
         
@@ -262,6 +268,7 @@ class StimPrep:
         ----------
         optimal[dict]
         interval[int] the interval of degrees
+        stype[str]: 'optimal' or 'natural'
         
         Returns
         -------
@@ -276,7 +283,8 @@ class StimPrep:
                 raise NameError('No pickle file exists')
             with open(optimal,'rb') as f:
                 optimal = pickle.load(f)        
-        
+        if not stype in ['optimal','natural'] :
+            raise ValueError('stype only support optimal and natural!')
         opt_rot = dict()
         for org in optimal.keys():
             op_img = optimal[org].astype('uint8')
@@ -290,7 +298,10 @@ class StimPrep:
                 opt_rot[ro_key] = op_rog
         #save the dict using pickle
         cur_path = os.getcwd()
-        store_folder = pjoin(cur_path, 'DataStore')
+        if stype == 'natural':
+            store_folder = pjoin(cur_path, 'NaDataStore')
+        else:
+            store_folder = pjoin(cur_path, 'DataStore')
         if not os.path.exists(store_folder):
             os.makedirs(store_folder)
         file = pjoin(store_folder, f'RotateStimuli-{self.layer}_{self.channel}.pickle')
@@ -300,7 +311,7 @@ class StimPrep:
             pickle.dump(opt_rot, f)
         return opt_rot
     
-    def gen_sca(self, optimal, num):
+    def gen_sca(self, optimal, num, stype='optimal'):
         """
         Generate stimulus used in scaling invariance expirement
 
@@ -308,7 +319,8 @@ class StimPrep:
         ----------
         optimal[dict]
         num[int] the total nums of scale stimuli
-
+        stype[str]: 'optimal' or 'natural'
+        
         Returns
         -------
         opt_sca[dict]
@@ -322,6 +334,8 @@ class StimPrep:
                 raise NameError('No pickle file exists')
             with open(optimal,'rb') as f:
                 optimal = pickle.load(f)
+        if not stype in ['optimal','natural'] :
+            raise ValueError('stype only support optimal and natural!')
         #init dict for recording info
         opt_sca = dict()
         for org in optimal.keys():
@@ -345,7 +359,10 @@ class StimPrep:
                 opt_sca[sc_key] = op_rog
             #save the dict using pickle
             cur_path = os.getcwd()
-            store_folder = pjoin(cur_path, 'DataStore')
+            if stype == 'natural':
+                store_folder = pjoin(cur_path, 'NaDataStore')
+            else:
+                store_folder = pjoin(cur_path, 'DataStore')
             if not os.path.exists(store_folder):
                 os.makedirs(store_folder)
             file = pjoin(store_folder, f'ScaleStimuli-{self.layer}_{self.channel}.pickle')
@@ -371,7 +388,7 @@ class StimPrep:
         """
         natrual_save = dict()
         natrual = dict()
-        intere = 2*top
+        intere = 3*top
         # Extract Activation
         activation = self.dnn.compute_activation(stim, self.mask)
         # Use Array_statistic in dnn.base to Do Max-pooling
@@ -393,52 +410,44 @@ class StimPrep:
             loc.append(pos)
         #crop natural image of its receptive field
         topnum = 0
-        act_base = np.zeros((intere))
         act_test = np.zeros((intere))
         for img_id in channel_stim.get('stimID'):
-            image = np.asarray(Image.open(pjoin(stim.header['path'], img_id)))
-            #solve 
-            if image.ndim == 2:
-                pass
-            else:
-                image = image.transpose(2,0,1)
-                image = ip.resize(image, (224,224)).transpose(1,2,0)
-                #init bkg
-                bkg = np.zeros((224,224,3),dtype=np.uint8)
-                bkg[:,:,:] = 127
-                bkg = Image.fromarray(bkg)                
-                #get units location
-                na_unit = loc[topnum]
-                #define para to pick region of rf
-                center_x = int((na_unit[0]/self.fm_size) * 224)
-                center_y = int((na_unit[1]/self.fm_size) * 224)
-                threshold = int(self.rf_size/2)
-                #define rule to handle different situation
-                rule = lambda x,y: (x,y) if (x>0) & (y<224) else (0,self.rf_size) if x<0 else (224-self.rf_size,224)
-                x_pos = rule(center_x-threshold, center_x+threshold)
-                y_pos = rule(center_y-threshold, center_y+threshold)
-                na_img = image[x_pos[0]:x_pos[1], y_pos[0]:y_pos[1], :]
-                na_img = Image.fromarray(na_img)
-                #get upper left pos and paste
-                point = int(112-self.rf_size/2)
-                bkg.paste(na_img, (point, point))
-                nat_img = np.asarray(bkg)
-                #compute act to select useful rf_image
-                img_org = image[np.newaxis,:,:,:].transpose(0,3,1,2)
-                img_test = nat_img[np.newaxis,:,:,:].transpose(0,3,1,2)
-                act_ba = self.dnn.compute_activation(img_org, self.mask).get(self.layer)[0,0,na_unit[0],na_unit[1]]
-                act_te = self.dnn.compute_activation(img_test, self.mask).get(self.layer)[0,0,6,6]
-                act_base[topnum] = act_ba
-                act_test[topnum] = act_te
-                #add values to dict
-                nasave_key = f'{topnum}'
-                natrual_save[nasave_key] = nat_img
-                topnum += 1
+            image = np.asarray(Image.open(pjoin(stim.header['path'], img_id)).convert('RGB')).transpose(2,0,1)
+            image = ip.resize(image, (224,224)).transpose(1,2,0)
+            #init bkg
+            bkg = np.zeros((224,224,3),dtype=np.uint8)
+            bkg[:,:,:] = 127
+            bkg = Image.fromarray(bkg)                
+            #get units location
+            na_unit = loc[topnum]
+            #define para to pick region of rf
+            center_x = int((na_unit[0]/self.fm_size) * 224)
+            center_y = int((na_unit[1]/self.fm_size) * 224)
+            threshold = int(self.rf_size/2)
+            #define rule to handle different situation
+            rule = lambda x,y: (x,y) if (x>0) & (y<224) else (0,self.rf_size) if x<0 else (224-self.rf_size,224)
+            x_pos = rule(center_x-threshold, center_x+threshold)
+            y_pos = rule(center_y-threshold, center_y+threshold)
+            na_img = image[x_pos[0]:x_pos[1], y_pos[0]:y_pos[1], :]
+            na_img = Image.fromarray(na_img)
+            #get upper left pos and paste
+            point = int(112-self.rf_size/2)
+            bkg.paste(na_img, (point, point))
+            nat_img = np.asarray(bkg)
+            #compute act to select useful rf_image
+            img_test = nat_img[np.newaxis,:,:,:].transpose(0,3,1,2)
+            act_te = self.dnn.compute_activation(img_test, self.mask).get(self.layer)[0,0,6,6]
+            act_test[topnum] = act_te
+            #add values to dict
+            nasave_key = f'{topnum}'
+            natrual_save[nasave_key] = nat_img
+            topnum += 1
         #select images which act bias is less
         standard = np.mean(act_test)
         act_diff = act_test - standard
         interest = np.argsort(act_diff)[-top:][::-1]
         num = 0
+        print(natrual_save.keys())
         for item in interest:
             pic =  natrual_save[str(item)]
             na_key = f'top{num+1}'
@@ -446,7 +455,7 @@ class StimPrep:
             num += 1
         #save the dict using pickle
         cur_path = os.getcwd()
-        store_folder = pjoin(cur_path, 'DataStore')
+        store_folder = pjoin(cur_path, 'NaDataStore')
         if not os.path.exists(store_folder):
             os.makedirs(store_folder)
         file = pjoin(store_folder, f'NaturalStimuli-{self.layer}_{self.channel}.pickle')
@@ -456,7 +465,7 @@ class StimPrep:
             pickle.dump(natrual, f)
         return natrual
 
-    def extr_act(self, stim, topnum, subnum):
+    def extr_act(self, stim, topnum, subnum, stype='optimal'):
         """
         process one stimuli dict to csv file
 
@@ -465,6 +474,7 @@ class StimPrep:
         stim[dict/pickle]
         topnum [int]: num of parameters
         subnum [int]: num of repeats
+        stype[str]: 'optimal' or 'natural'
         
         Returns
         -------
@@ -475,6 +485,8 @@ class StimPrep:
         # Type check
         if not (isinstance(stim,str) or isinstance(stim,dict)):
             raise TypeError('Only dict or .pickle file path is available')
+        if not stype in ['optimal','natural'] :
+            raise ValueError('stype only support optimal and natural!')
         # Load dict from pickle
         if isinstance(stim,str):
             if not os.path.exists(stim):
@@ -491,10 +503,33 @@ class StimPrep:
             type_name = 'SI'
         # prepare dict
         activ_dict = {}
-        # extract activation
-        for top in range(topnum):
-            for sub in range(subnum):
-                picname = f'top{top+1}_sub{sub+1}'
+        if stype == 'optimal':
+            # extract activation of optimal
+            for top in range(topnum):
+                for sub in range(subnum):
+                    picname = f'top{top+1}_sub{sub+1}'
+                    activ_list = []
+                    column_list = []
+                    stimuli_set = np.random.rand(224,224,3).astype('uint8')[np.newaxis,:,:,:].transpose(0,3,1,2)
+                    for key in stim.keys():
+                        if picname in key:
+                            level = eval(key[key.rfind(':')+1:])
+                            stimuli = stim[key]
+                            dnn_input = stimuli[np.newaxis,:,:,:].transpose(0,3,1,2)
+                            stimuli_set = np.concatenate((stimuli_set,dnn_input),axis=0)
+                            column_list.append(level)
+                    #generate activation dict
+                    stimuli_set = np.delete(stimuli_set,0,axis=0)
+                    activ = self.dnn.compute_activation(stimuli_set,self.mask).get(self.layer)[:,0,self.unit[0],self.unit[1]]
+                    activ_list = list(activ)
+                    activ_dict[picname]=activ_list
+            #define store folder
+            cur_path = os.getcwd()
+            store_folder = pjoin(cur_path, 'ActData')
+        else:
+            na_top = topnum * subnum
+            for num in range(na_top):
+                picname = f'top{num+1}'
                 activ_list = []
                 column_list = []
                 stimuli_set = np.random.rand(224,224,3).astype('uint8')[np.newaxis,:,:,:].transpose(0,3,1,2)
@@ -510,14 +545,15 @@ class StimPrep:
                 activ = self.dnn.compute_activation(stimuli_set,self.mask).get(self.layer)[:,0,self.unit[0],self.unit[1]]
                 activ_list = list(activ)
                 activ_dict[picname]=activ_list
+            #define store folder
+            cur_path = os.getcwd()
+            store_folder = pjoin(cur_path, 'NaActData')
         #generate dataframe
         df_activ = pd.DataFrame(activ_dict)
         df_activ = pd.DataFrame(np.array(df_activ).transpose(),
                                 index=list(activ_dict.keys()),columns=column_list)
         df_activ = df_activ.sort_index(axis=1)
         # save the df as csv
-        cur_path = os.getcwd()
-        store_folder = pjoin(cur_path, 'ActData')
         if not os.path.exists(store_folder):
             os.makedirs(store_folder)
         file_name = pjoin(store_folder,f'{self.layer}_{self.channel}_{type_name}.csv')
