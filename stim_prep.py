@@ -1,4 +1,4 @@
-import pickle,os,copy
+import pickle,os,copy,re
 from os.path import join as pjoin
 from PIL import Image
 import numpy as np
@@ -374,7 +374,7 @@ class StimPrep:
 
     def gen_na(self, stim, top):
         """
-        Pick top natrual images of the target unit in ImageNet2012 test data
+        Pick top natural images of the target unit in ImageNet2012 test data
         
         Parameters
         ----------
@@ -386,8 +386,8 @@ class StimPrep:
         -------
         natural[dict]
         """
-        natrual_save = dict()
-        natrual = dict()
+        natural_save = dict()
+        natural = dict()
         intere = 3*top
         # Extract Activation
         activation = self.dnn.compute_activation(stim, self.mask)
@@ -440,18 +440,18 @@ class StimPrep:
             act_test[topnum] = act_te
             #add values to dict
             nasave_key = f'{topnum}'
-            natrual_save[nasave_key] = nat_img
+            natural_save[nasave_key] = nat_img
             topnum += 1
         #select images which act bias is less
         standard = np.mean(act_test)
         act_diff = act_test - standard
         interest = np.argsort(act_diff)[-top:][::-1]
         num = 0
-        print(natrual_save.keys())
+        print(natural_save.keys())
         for item in interest:
-            pic =  natrual_save[str(item)]
+            pic =  natural_save[str(item)]
             na_key = f'top{num+1}'
-            natrual[na_key] = pic
+            natural[na_key] = pic
             num += 1
         #save the dict using pickle
         cur_path = os.getcwd()
@@ -462,8 +462,8 @@ class StimPrep:
         if os.path.exists(file):
             os.remove(file)
         with open(file, 'wb') as f:
-            pickle.dump(natrual, f)
-        return natrual
+            pickle.dump(natural, f)
+        return natural
 
     def extr_act(self, stim, topnum, subnum, stype='optimal'):
         """
@@ -534,7 +534,8 @@ class StimPrep:
                 column_list = []
                 stimuli_set = np.random.rand(224,224,3).astype('uint8')[np.newaxis,:,:,:].transpose(0,3,1,2)
                 for key in stim.keys():
-                    if picname in key:
+                    time = eval(re.sub('\D','',key.split('_')[0]))
+                    if num == time-1:
                         level = eval(key[key.rfind(':')+1:])
                         stimuli = stim[key]
                         dnn_input = stimuli[np.newaxis,:,:,:].transpose(0,3,1,2)
@@ -558,3 +559,4 @@ class StimPrep:
             os.makedirs(store_folder)
         file_name = pjoin(store_folder,f'{self.layer}_{self.channel}_{type_name}.csv')
         df_activ.to_csv(file_name)
+        
