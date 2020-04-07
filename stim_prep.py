@@ -7,14 +7,14 @@ from skimage import transform
 from dnnbrain.dnn.base import ip
 from dnnbrain.dnn.core import Mask
 from dnnbrain.dnn.algo import SynthesisImage
-
+import matplotlib.pyplot as plt
 
 class StimPrep:
     """
     Generate optimal image based on net_info
     """
-    def __init__(self, dnn, activ_metric='mean', regular_metric=None, 
-                 precondition_metric=None, smooth_metric=None):
+    def __init__(self, dnn, activ_metric='mean', regular_metric='TV', 
+                 precondition_metric=None, smooth_metric='Fourier'):
                  
         """
         Parameters:
@@ -71,7 +71,26 @@ class StimPrep:
         erea = (x-223/2)**2+(y-223/2)**2
         pic[erea>(self.rf_size/2)**2,:] = [127,127,127]
         return pic
+    
+    def show(self,pklfile,subfile):
+        """
+        pklefile[str]
+        subfile[str]
+        """
+        path = os.getcwd()
+        filepath = pjoin(path,'DataStore',pklfile)
+        with open(filepath,'rb') as f:
+            picdict = pickle.load(f)
+            
+        plt.imshow(picdict[subfile])
+    
+    def fopen(self,pklfile):
+        path = pjoin(os.getcwd(),'DataStore')
+        with open(pjoin(path,pklfile),'rb') as f:
+            fdict = pickle.load(f)
+        return fdict
 
+    
     def find_para(self, reg_lambda, factor, top, nruns):
         """
         give a parameter range to find the top parameters in nruns
@@ -91,6 +110,7 @@ class StimPrep:
             raise TypeError('Both reg_lambda and factor only support ndarray')
         else:
             #init dataframe for sorting
+            stimuli_dict = {}
             para_df = pd.DataFrame(columns=['lambda','factor','act'])
             for l_len in range(reg_lambda.size):
                 for f_len in range(factor.size):
@@ -106,18 +126,26 @@ class StimPrep:
                         img = op_img[np.newaxis,:,:,:]
                         stimuli_set = np.concatenate((stimuli_set,img),axis=0)
                     stimuli_set = np.delete(stimuli_set,0,axis=0)
+                    stimuli_dict[f'{lam}_{fac}']=stimuli_set
                     act = self.dnn.compute_activation(stimuli_set, self.mask).get(self.layer)[:,0,self.unit[0],self.unit[1]]
                     act_sta = np.mean(np.array(act))
                     #add values to dataframe
                     info = pd.DataFrame({'lambda':lam,'factor':fac,'act':act_sta}, index=[0])
                     para_df = para_df.append(info, ignore_index=True)
             # sort the dataframe to get top parameters
+            para_df.to_csv(pjoin(os.getcwd(),'Paras1.csv'))
             para_df = para_df.sort_values(by=['act'], ascending=False).reset_index(drop=True)
+            para_df.to_csv(pjoin(os.getcwd(),'Paras2.csv'))
             para_act = para_df.iloc[0:top,:]
             # generate top parameters dict
             top_param = para_act.to_dict(orient='index')
             # store top_para as pickle
             cur_path = os.getcwd()
+            
+            stimuli_file = pjoin(cur_path,'stimuli.pickle') 
+            with open(stimuli_file,'wb') as f:
+                pickle.dump(stimuli_dict,f)
+            
             store_folder = pjoin(cur_path, 'DataStore')
             if not os.path.exists(store_folder):
                 os.makedirs(store_folder)
@@ -161,7 +189,8 @@ class StimPrep:
                 op_img = self.syn.synthesize(None, self.unit, 0.1, lam, 100,
                                              '.', None, 0.2, fac, step=150)
                 # transpose its shape to (224,224,3)
-                op_img = op_img.transpose(1,2,0)    
+                op_img = ip.to_pil(op_img,True)
+                op_img = np.array(op_img)
                 # add values to the dict
                 op_key = f'top{top+1}_sub{sub+1}'
                 optimal[op_key] = op_img
@@ -213,14 +242,14 @@ class StimPrep:
                 op_img = optimal[org]
                 #crop op_img according to its rf_size
                 center = int(224/2)
-                span = int(self.rf_size/2)
-                op_img = op_img[center-span:center+span, center-span:center+span,:].astype('uint8')
+                span = round(self.rf_size/2)
+                op_img = op_img[center-span:center+span+1, center-span:center+span+1,:]#.astype('uint8')
                 #op_img = ip.to_pil(op_img.transpose(2,0,1))
                 op_img = Image.fromarray(op_img)
                 #move the oringal image to generate new stimulus
                 center_new = int(448/2)
-                start_y = int((448-self.rf_size)/2)
-                start_x = 224-self.rf_size 
+                start_y = round((448-self.rf_size)/2)
+                start_x = 224-self.rf_size-1
                 #translate in axis X
                 if axis == 'X':
                     for move in range(start_x, center_new+1):
@@ -287,7 +316,7 @@ class StimPrep:
             raise ValueError('stype only support optimal and natural!')
         opt_rot = dict()
         for org in optimal.keys():
-            op_img = optimal[org].astype('uint8')
+            op_img = optimal[org]#.astype('uint8')
             op_img = ip.to_pil(op_img.transpose(2,0,1))
             #rotate op_img based on degree
             for degree in range(0, 360, interval):
