@@ -3,7 +3,7 @@
 """
 Created on Mon Apr  6 20:36:59 2020
 
-@author: zhouming
+@author: gongzhengxin
 """
 import pickle
 import pandas as pd
@@ -12,8 +12,8 @@ from os.path import join as pjoin
 import matplotlib.pyplot as plt
 
 # data path
-DSpath = r'/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/DataStore'
-ADpath = r'/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/ActData'
+DSpath = pjoin(os.getcwd,'DataStore')
+ADpath = pjoin(os.getcwd,'ActData')
 
 # unit_info
 unit_info = { 'conv2':[186]}#,
@@ -65,23 +65,29 @@ plt.show()
 import pandas as pd
 
 # =============================================================================
-# ac1 = pd.read_csv('/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/ActData/conv2_186_TI.csv')
-# ac0 = pd.read_csv('/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/conv2_186_TI.csv')
+# ac1 = pd.read_csv(pjoin(os.getcwd(),'ActData/conv2_186_TI.csv'))
+# ac0 = pd.read_csv(pjoin(os.getced(),'conv2_186_TI.csv'))
 # ac = np.array(ac1.iloc[:,1:])-np.array(ac0.iloc[:,1:])
 # =============================================================================
 
 def img_compare(unit,dtype,pos):
-    sfile = f'/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/DataStore/OptimalImages-{unit}.pickle'
+    '''
+    :param unit: like 'conv3_12' 
+    :param dtype: 'TI' or 'RI'
+    :param pos: 
+    :return: pyplot fig
+    '''
+    sfile = pjoin(os.getcwd(),f'OptimalImages-{unit}.pickle')
     with open(sfile,'rb') as f:
         stand = pickle.load(f)
     keys = f'top{pos[0]}_sub{pos[1]}'
     stand_pic = stand[keys]
 
     if dtype == 'TI':
-        tfile = f'/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/DataStore/TransferStimuli-{unit}.pickle'
+        tfile = pjoin(os.getcwd(),f'TransferStimuli-{unit}.pickle')
         keys = f'top{pos[0]}_sub{pos[1]}_move:0'
     elif dtype == 'RI':
-        tfile = f'/nfs/s2/userhome/zhouming/workingdir/optimal_invariance/DataStore/RotateStimuli-{unit}.pickle'
+        tfile = pjoin(os.getcwd(),'DataStore/RotateStimuli-{unit}.pickle')
         keys = f'top{pos[0]}_sub{pos[1]}_rot:0'
     
     with open(tfile,'rb') as f:
