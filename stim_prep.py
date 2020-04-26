@@ -380,9 +380,18 @@ class StimPrep:
                 bkg = Image.fromarray(bkg)
                 #scale op_img based on num
                 percentage = per/num
-                op_rog = transform.rescale(op_img, [percentage,percentage])
-                #paste op_rog on bkg!!!!!waiting to fix
-                bkg.paste(op_rog,)
+                
+                op_rog = Image.fromarray(op_img)
+                resizedWidth = int(op_rog.size[0] * percentage)
+                resizedHeight = int(op_rog.size[1] * percentage)
+                op_rog = op_rog.resize((resizedWidth, resizedHeight), Image.ANTIALIAS)
+                
+                # Calculate the distance from NW anchor
+                # 112 = 224 / 2
+                horizontalDistance = 112 - op_rog.size[0] // 2
+                verticalDistance = 112 - op_rog.size[1] // 2
+                bkg.paste(op_rog, (horizontalDistance, verticalDistance))
+                
                 #add values to dict
                 sc_key = f'{org}_sca:{per}/{num}'
                 opt_sca[sc_key] = op_rog
